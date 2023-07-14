@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 from PIL import Image
+import mediapipe as mp
 
 from ..util import HWC3, resize_image
 from . import util
@@ -76,7 +77,9 @@ class OpenposeDetector:
     """
     def __init__(self, body_estimation, hand_estimation=None, face_estimation=None):
         self.body_estimation = body_estimation
-        self.hand_estimation = hand_estimation
+        self.hand_estimation = mp.solutions.holistic.Holistic(
+            min_detection_confidence=0.5
+        )
         self.face_estimation = face_estimation
 
     @classmethod
@@ -84,28 +87,29 @@ class OpenposeDetector:
 
         if pretrained_model_or_path == "lllyasviel/ControlNet":
             filename = filename or "annotator/ckpts/body_pose_model.pth"
-            hand_filename = hand_filename or "annotator/ckpts/hand_pose_model.pth"
+            # hand_filename = hand_filename or "annotator/ckpts/hand_pose_model.pth"
             face_filename = face_filename or "facenet.pth"
 
             face_pretrained_model_or_path = "lllyasviel/Annotators"
         else:
             filename = filename or "body_pose_model.pth"
-            hand_filename = hand_filename or "hand_pose_model.pth"
+            # hand_filename = hand_filename or "hand_pose_model.pth"
             face_filename = face_filename or "facenet.pth"
 
             face_pretrained_model_or_path = pretrained_model_or_path
 
         if os.path.isdir(pretrained_model_or_path):
             body_model_path = os.path.join(pretrained_model_or_path, filename)
-            hand_model_path = os.path.join(pretrained_model_or_path, hand_filename)
+            # hand_model_path = os.path.join(pretrained_model_or_path, hand_filename)
             face_model_path = os.path.join(face_pretrained_model_or_path, face_filename)
         else:
             body_model_path = hf_hub_download(pretrained_model_or_path, filename, cache_dir=cache_dir)
-            hand_model_path = hf_hub_download(pretrained_model_or_path, hand_filename, cache_dir=cache_dir)
+            # hand_model_path = hf_hub_download(pretrained_model_or_path, hand_filename, cache_dir=cache_dir)
             face_model_path = hf_hub_download(face_pretrained_model_or_path, face_filename, cache_dir=cache_dir)
 
         body_estimation = Body(body_model_path)
-        hand_estimation = Hand(hand_model_path)
+        # hand_estimation = Hand(hand_model_path)
+        hand_estimation = None
         face_estimation = Face(face_model_path)
 
         return cls(body_estimation, hand_estimation, face_estimation)
@@ -119,22 +123,35 @@ class OpenposeDetector:
     def detect_hands(self, body: BodyResult, oriImg) -> Tuple[Union[HandResult, None], Union[HandResult, None]]:
         left_hand = None
         right_hand = None
-        H, W, _ = oriImg.shape
-        for x, y, w, is_left in util.handDetect(body, oriImg):
-            peaks = self.hand_estimation(oriImg[y:y+w, x:x+w, :]).astype(np.float32)
-            if peaks.ndim == 2 and peaks.shape[1] == 2:
-                peaks[:, 0] = np.where(peaks[:, 0] < 1e-6, -1, peaks[:, 0] + x) / float(W)
-                peaks[:, 1] = np.where(peaks[:, 1] < 1e-6, -1, peaks[:, 1] + y) / float(H)
+        # H, W, _ = oriImg.shape
+        # for x, y, w, is_left in util.handDetect(body, oriImg):
+        #     peaks = self.hand_estimation(oriImg[y:y+w, x:x+w, :]).astype(np.float32)
+        #     if peaks.ndim == 2 and peaks.shape[1] == 2:
+        #         peaks[:, 0] = np.where(peaks[:, 0] < 1e-6, -1, peaks[:, 0] + x) / float(W)
+        #         peaks[:, 1] = np.where(peaks[:, 1] < 1e-6, -1, peaks[:, 1] + y) / float(H)
                 
-                hand_result = [
-                    Keypoint(x=peak[0], y=peak[1])
-                    for peak in peaks
-                ]
+        #         hand_result = [
+        #             Keypoint(x=peak[0], y=peak[1])
+        #             for peak in peaks
+        #         ]
 
-                if is_left:
-                    left_hand = hand_result
-                else:
-                    right_hand = hand_result
+        #         if is_left:
+        #             left_hand = hand_result
+        #         else:
+        #             right_hand = hand_result
+        image = cv2.cvtColor(oriImg, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = self.hand_estimation.process(image)
+        image.flags.writeable = True
+
+        if results.right_hand_landmarks:
+          right_hand = [Keypoint(x=item.x, y=item.y) for item in results.right_hand_landmarks.landmark]
+        
+        if results.left_hand_landmarks:
+          left_hand = [Keypoint(x=item.x, y=item.y) for item in results.left_hand_landmarks.landmark]
+
+        return left_hand, right_hand
+
 
         return left_hand, right_hand
 
